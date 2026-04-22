@@ -1,0 +1,31 @@
+kind = "web"
+previewPath = "/"
+title = "Dual Doodle"
+version = "1.0.0"
+id = "artifacts/dual-doodle"
+router = "path"
+
+[[integratedSkills]]
+name = "react-vite"
+version = "1.0.0"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 23412
+
+[services.development]
+run = "pnpm --filter @workspace/dual-doodle run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/dual-doodle", "run", "build" ]
+publicDir = "artifacts/dual-doodle/dist/public"
+serve = "static"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "23412"
+BASE_PATH = "/"

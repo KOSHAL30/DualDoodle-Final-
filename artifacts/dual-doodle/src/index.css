@@ -1,0 +1,135 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@plugin "@tailwindcss/typography";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+  --color-border: hsl(var(--border));
+  --color-input: hsl(var(--input));
+  --color-ring: hsl(var(--ring));
+  --color-card: hsl(var(--card));
+  --color-card-foreground: hsl(var(--card-foreground));
+  --color-popover: hsl(var(--popover));
+  --color-popover-foreground: hsl(var(--popover-foreground));
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+  --color-secondary: hsl(var(--secondary));
+  --color-secondary-foreground: hsl(var(--secondary-foreground));
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+  --color-accent: hsl(var(--accent));
+  --color-accent-foreground: hsl(var(--accent-foreground));
+  --color-destructive: hsl(var(--destructive));
+  --color-destructive-foreground: hsl(var(--destructive-foreground));
+
+  --font-sans: var(--app-font-sans);
+  --font-mono: var(--app-font-mono);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+:root {
+  --background: 250 30% 98%;
+  --foreground: 240 25% 12%;
+  --border: 240 15% 90%;
+  --input: 240 15% 92%;
+  --ring: 262 83% 58%;
+  --card: 0 0% 100%;
+  --card-foreground: 240 25% 12%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 240 25% 12%;
+  --primary: 262 83% 58%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 200 95% 50%;
+  --secondary-foreground: 0 0% 100%;
+  --muted: 240 15% 95%;
+  --muted-foreground: 240 10% 45%;
+  --accent: 320 85% 60%;
+  --accent-foreground: 0 0% 100%;
+  --destructive: 0 84% 60%;
+  --destructive-foreground: 0 0% 100%;
+
+  --app-font-sans: 'Inter', system-ui, sans-serif;
+  --app-font-mono: 'JetBrains Mono', Menlo, monospace;
+  --radius: 0.75rem;
+}
+
+.dark {
+  --background: 240 25% 8%;
+  --foreground: 240 10% 95%;
+  --border: 240 15% 20%;
+  --input: 240 15% 18%;
+  --ring: 262 83% 65%;
+  --card: 240 25% 12%;
+  --card-foreground: 240 10% 95%;
+  --popover: 240 25% 12%;
+  --popover-foreground: 240 10% 95%;
+  --primary: 262 83% 65%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 200 95% 55%;
+  --secondary-foreground: 0 0% 100%;
+  --muted: 240 15% 18%;
+  --muted-foreground: 240 10% 65%;
+  --accent: 320 85% 65%;
+  --accent-foreground: 0 0% 100%;
+  --destructive: 0 75% 60%;
+  --destructive-foreground: 0 0% 100%;
+}
+
+@layer base {
+  * {
+    border-color: hsl(var(--border));
+  }
+  body {
+    @apply font-sans antialiased;
+    background: hsl(var(--background));
+    color: hsl(var(--foreground));
+  }
+}
+
+.dd-bg-gradient {
+  background:
+    radial-gradient(1200px 600px at 10% -10%, hsl(262 83% 58% / 0.15), transparent 60%),
+    radial-gradient(1000px 500px at 110% 10%, hsl(320 85% 60% / 0.12), transparent 60%),
+    radial-gradient(900px 600px at 50% 110%, hsl(200 95% 50% / 0.12), transparent 60%),
+    hsl(var(--background));
+}
+
+.dd-card {
+  background: hsl(var(--card));
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
+}
+
+.dd-tool-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: 0.625rem;
+  color: hsl(var(--foreground));
+  transition: all 0.15s ease;
+  background: transparent;
+  border: 1px solid transparent;
+}
+.dd-tool-btn:hover {
+  background: hsl(var(--muted));
+}
+.dd-tool-btn[data-active="true"] {
+  background: hsl(var(--primary) / 0.15);
+  color: hsl(var(--primary));
+  border-color: hsl(var(--primary) / 0.4);
+}
+
+.canvas-shadow {
+  box-shadow:
+    0 1px 0 hsl(var(--border)),
+    0 30px 60px -30px hsl(240 25% 12% / 0.25);
+}
