@@ -1,3 +1,46 @@
-<svg width="180" height="180" viewBox="0 0 180 180" fill="none" xmlns="http://www.w3.org/2000/svg">
-<rect width="180" height="180" rx="36" fill="#FF3C00"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 180" width="180" height="180">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="180" y2="180" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#4F46E5" />
+      <stop offset="100%" stop-color="#7C3AED" />
+    </linearGradient>
+    <linearGradient id="brushBody" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#FCD34D" />
+      <stop offset="100%" stop-color="#F59E0B" />
+    </linearGradient>
+    <linearGradient id="brushTip" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#EC4899" />
+      <stop offset="100%" stop-color="#DB2777" />
+    </linearGradient>
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="4" stdDeviation="6" flood-opacity="0.3" />
+    </filter>
+  </defs>
+
+  <!-- Modern squircle rounded background -->
+  <rect width="180" height="180" rx="42" fill="url(#bg)" />
+
+  <!-- Artist Palette in clean white with subtle drop shadow -->
+  <path d="M92 34C56 34 34 54 34 86C34 122 58 146 94 146C106 146 116 141 122 133C127 127 132 124 138 124C145 124 149 128 149 133C149 135 148 137 147 139C154 130 158 119 158 104C158 64 128 34 92 34Z"
+        fill="#FFFFFF"
+        filter="url(#glow)" />
+
+  <!-- Palette thumb hole -->
+  <ellipse cx="130" cy="98" rx="10" ry="14" transform="rotate(-15 130 98)" fill="url(#bg)" />
+
+  <!-- Four vibrant paint drops -->
+  <circle cx="58" cy="78" r="9" fill="#EF4444" />
+  <circle cx="76" cy="54" r="9" fill="#F59E0B" />
+  <circle cx="106" cy="54" r="9" fill="#10B981" />
+  <circle cx="128" cy="72" r="9" fill="#06B6D4" />
+
+  <!-- Creative paintbrush crossing into the palette -->
+  <!-- Brush handle -->
+  <path d="M142 38L98 82L106 90L150 46C153 43 153 38 150 35L145 30C142 27 137 27 134 30L142 38Z" fill="url(#brushBody)" />
+  <!-- Ferrule (metal band) -->
+  <path d="M94 86L86 94L94 102L102 94Z" fill="#94A3B8" />
+  <!-- Brush bristle tip with colorful paint -->
+  <path d="M86 94L68 112C66 114 65 117 66 120C67 121 68 121 70 120L88 102Z" fill="url(#brushTip)" />
+  <!-- Wet paint dab on tip -->
+  <circle cx="67" cy="118" r="4.5" fill="#EC4899" />
 </svg>
