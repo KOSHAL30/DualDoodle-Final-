@@ -3,8 +3,8 @@ services:
     name: dual-doodle
     runtime: node
     plan: free
-    buildCommand: pnpm install && pnpm run build
-    startCommand: pnpm run start
+    buildCommand: corepack enable && pnpm install && pnpm run build
+    startCommand: node artifacts/api-server/dist/index.mjs
     envVars:
       - key: NODE_ENV
         value: production
