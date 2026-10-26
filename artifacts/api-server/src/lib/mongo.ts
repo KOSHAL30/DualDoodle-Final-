@@ -32,11 +32,20 @@ export async function connectMongo(): Promise<void> {
   }
 
   try {
-    await mongoose.connect(uri, { serverSelectionTimeoutMS: 5000 });
+    await mongoose.connect(uri, { serverSelectionTimeoutMS: 3000 });
     connected = true;
     logger.info("MongoDB connected");
   } catch (err) {
     if (!isCloudDeploy) {
+      try {
+        const localUri = "mongodb://127.0.0.1:27017/dualdoodle";
+        await mongoose.connect(localUri, { serverSelectionTimeoutMS: 2000 });
+        connected = true;
+        logger.info({ uri: localUri }, "Connected to local MongoDB instance as fallback");
+        return;
+      } catch {
+        // Local MongoDB not available, fallback to in-memory
+      }
       logger.warn(
         { err },
         "MongoDB Atlas connection failed (likely local IP address not in Atlas Network Access whitelist). Falling back to in-memory MongoDB for local execution.",
