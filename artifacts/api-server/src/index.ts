@@ -9,6 +9,7 @@ import app from "./app";
 import { logger } from "./lib/logger";
 import { connectMongo } from "./lib/mongo";
 import { attachSocketIO } from "./lib/socket";
+import { startKeepAlive } from "./lib/keepAlive";
 
 const rawPort = process.env["PORT"];
 
@@ -32,6 +33,7 @@ async function main() {
 
   server.listen(port, () => {
     logger.info({ port }, "Server listening");
+    startKeepAlive(port);
   });
 }
 

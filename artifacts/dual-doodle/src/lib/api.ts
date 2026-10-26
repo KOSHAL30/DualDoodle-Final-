@@ -1,4 +1,5 @@
-const API_BASE = "/api";
+const RAW_BASE = (import.meta.env.VITE_API_URL as string | undefined)?.replace(/\/+$/, "") || "";
+const API_BASE = `${RAW_BASE}/api`;
 
 export interface AuthUser {
   id: string;

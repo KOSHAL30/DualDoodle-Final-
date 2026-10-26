@@ -114,7 +114,7 @@ export async function notifySessionEnded(code: string): Promise<void> {
 export function attachSocketIO(httpServer: HttpServer): SocketIOServer {
   const io = new SocketIOServer(httpServer, {
     cors: { 
-      origin: process.env.FRONTEND_URL || "*", 
+      origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => callback(null, true), 
       credentials: true 
     },
     maxHttpBufferSize: 5e6,

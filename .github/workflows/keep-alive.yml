@@ -1,0 +1,22 @@
+name: Keep Alive Heartbeat
+
+on:
+  schedule:
+    # Runs every 14 minutes to prevent Render free tier from going to sleep (15 min idle timeout)
+    - cron: '*/14 * * * *'
+  workflow_dispatch:
+
+jobs:
+  heartbeat:
+    name: Ping Services
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Render Backend
+        run: |
+          TARGET_URL="${{ secrets.RENDER_URL }}"
+          if [ -z "$TARGET_URL" ]; then
+            TARGET_URL="https://dual-doodle.onrender.com"
+          fi
+          echo "Sending keep-alive ping to $TARGET_URL/api/healthz..."
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -m 20 "$TARGET_URL/api/healthz" || echo "000")
+          echo "Health check HTTP status: $HTTP_STATUS"

@@ -31,9 +31,25 @@ app.use(
   }),
 );
 
+const configuredOrigin = process.env.FRONTEND_URL;
+
 app.use(
   cors({
-    origin: process.env.FRONTEND_URL || "*",
+    origin: (origin, callback) => {
+      // Allow non-browser requests (e.g. curl, health checks)
+      if (!origin) return callback(null, true);
+      if (!configuredOrigin || configuredOrigin === "*") return callback(null, true);
+      const origins = configuredOrigin.split(",").map((o) => o.trim());
+      if (
+        origins.includes(origin) ||
+        origins.some((o) => o === "*") ||
+        /\.vercel\.app$/.test(new URL(origin).hostname) ||
+        /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)
+      ) {
+        return callback(null, true);
+      }
+      return callback(null, true);
+    },
     credentials: true,
   })
 );

@@ -63,3 +63,4 @@ refactor*.cjs
 repomix-output.xml
 write-room.cjs
 artifacts/dual-doodle/patch.cjs
+.vercel
