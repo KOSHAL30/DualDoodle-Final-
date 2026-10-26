@@ -3,7 +3,7 @@ services:
     name: dual-doodle
     runtime: node
     plan: free
-    buildCommand: npm install -g pnpm && pnpm install && pnpm run build
+    buildCommand: pnpm install && pnpm run build
     startCommand: pnpm run start
     envVars:
       - key: NODE_ENV
