@@ -1,10 +1,15 @@
 import jwt from "jsonwebtoken";
 import type { Request, Response, NextFunction } from "express";
 
-const JWT_SECRET = process.env["JWT_SECRET"];
-
-if (!JWT_SECRET) {
-  throw new Error("JWT_SECRET environment variable is required");
+export function getJwtSecret(): string {
+  const secret = process.env["JWT_SECRET"];
+  if (!secret) {
+    if (process.env["NODE_ENV"] !== "production") {
+      return "dualdoodle-dev-local-jwt-secret-key-123456789";
+    }
+    throw new Error("JWT_SECRET environment variable is required");
+  }
+  return secret;
 }
 
 export interface AuthPayload {
@@ -13,12 +18,12 @@ export interface AuthPayload {
 }
 
 export function signToken(payload: AuthPayload): string {
-  return jwt.sign(payload, JWT_SECRET as string, { expiresIn: "7d" });
+  return jwt.sign(payload, getJwtSecret(), { expiresIn: "7d" });
 }
 
 export function verifyToken(token: string): AuthPayload | null {
   try {
-    const decoded = jwt.verify(token, JWT_SECRET as string) as AuthPayload;
+    const decoded = jwt.verify(token, getJwtSecret()) as AuthPayload;
     return { userId: decoded.userId, username: decoded.username };
   } catch {
     return null;

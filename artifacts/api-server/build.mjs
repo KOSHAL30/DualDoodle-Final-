@@ -111,11 +111,28 @@ async function buildAll() {
       js: `import { createRequire as __bannerCrReq } from 'node:module';
 import __bannerPath from 'node:path';
 import __bannerUrl from 'node:url';
+import __bannerFs from 'node:fs';
 
 globalThis.require = __bannerCrReq(import.meta.url);
 globalThis.__filename = __bannerUrl.fileURLToPath(import.meta.url);
 globalThis.__dirname = __bannerPath.dirname(globalThis.__filename);
-    `,
+
+if (typeof process.loadEnvFile === 'function') {
+  for (const envPath of [
+    __bannerPath.resolve(process.cwd(), '.env'),
+    __bannerPath.resolve(__dirname, '../.env'),
+    __bannerPath.resolve(__dirname, '../../.env'),
+    __bannerPath.resolve(__dirname, '.env')
+  ]) {
+    try {
+      if (__bannerFs.existsSync(envPath)) {
+        process.loadEnvFile(envPath);
+        break;
+      }
+    } catch {}
+  }
+}
+`,
     },
   });
 }
