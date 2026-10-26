@@ -11,11 +11,44 @@ let connected = false;
 
 export async function connectMongo(): Promise<void> {
   if (connected) return;
+  let uri = MONGODB_URI as string;
+  const isCloudDeploy = Boolean(
+    process.env.RENDER ||
+    process.env.RAILWAY_ENVIRONMENT ||
+    process.env.VERCEL ||
+    process.env.FLY_APP_NAME
+  );
+
+  if (uri === "memory") {
+    logger.info("Starting in-memory MongoDB server...");
+    const { MongoMemoryServer } = await import("mongodb-memory-server");
+    const mongod = await MongoMemoryServer.create();
+    uri = mongod.getUri();
+    logger.info({ uri }, "In-memory MongoDB started");
+    await mongoose.connect(uri);
+    connected = true;
+    logger.info("MongoDB connected");
+    return;
+  }
+
   try {
-    await mongoose.connect(MONGODB_URI as string);
+    await mongoose.connect(uri, { serverSelectionTimeoutMS: 5000 });
     connected = true;
     logger.info("MongoDB connected");
   } catch (err) {
+    if (!isCloudDeploy) {
+      logger.warn(
+        { err },
+        "MongoDB Atlas connection failed (likely local IP address not in Atlas Network Access whitelist). Falling back to in-memory MongoDB for local execution.",
+      );
+      const { MongoMemoryServer } = await import("mongodb-memory-server");
+      const mongod = await MongoMemoryServer.create();
+      uri = mongod.getUri();
+      await mongoose.connect(uri);
+      connected = true;
+      logger.info({ uri }, "In-memory MongoDB connected as fallback");
+      return;
+    }
     logger.error({ err }, "MongoDB connection failed");
     throw err;
   }

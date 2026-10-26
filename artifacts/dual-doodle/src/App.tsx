@@ -1,14 +1,12 @@
 import { Switch, Route, Router as WouterRouter, Redirect, useLocation } from "wouter";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { ThemeProvider } from "next-themes";
 import { AuthProvider, useAuth } from "@/lib/auth-context";
 import Login from "@/pages/Login";
 import Signup from "@/pages/Signup";
 import Dashboard from "@/pages/Dashboard";
 import Room from "@/pages/Room";
 import NotFound from "@/pages/not-found";
-import { Loader2 } from "lucide-react";
-
-const queryClient = new QueryClient();
+import { Loader2 } from "@/lib/lucide-icons";
 
 function Protected({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
@@ -71,13 +69,13 @@ function Routes() {
 
 function App() {
   return (
-    <QueryClientProvider client={queryClient}>
+    <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
       <AuthProvider>
         <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
           <Routes />
         </WouterRouter>
       </AuthProvider>
-    </QueryClientProvider>
+    </ThemeProvider>
   );
 }
 

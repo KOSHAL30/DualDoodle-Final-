@@ -6,21 +6,37 @@ export interface AuthUser {
   email: string;
 }
 
+export interface MessageData {
+  id?: string;
+  userId: string;
+  username: string;
+  text: string;
+  ts: number;
+}
+
+export interface Player {
+  userId: string;
+  username: string;
+  slot: number;
+}
+
 export interface SessionData {
   code: string;
   creatorId: string;
-  creatorUsername: string;
-  joinerId: string | null;
-  joinerUsername: string | null;
+  maxPlayers: number;
+  players: Player[];
   status: "waiting" | "active" | "ended";
   referenceImage: string | null;
   strokes: StrokeData[];
+  undoneStrokes: StrokeData[];
+  messages: MessageData[];
   createdAt: string;
   endedAt: string | null;
 }
 
 export interface StrokeData {
-  side: "left" | "right";
+  id?: number;
+  side: number;
   tool: string;
   color: string;
   size: number;
@@ -101,24 +117,24 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
-  login: (body: { email: string; password: string }) =>
+  login: (body: { identifier: string; password: string }) =>
     request<{ token: string; user: AuthUser }>("/auth/login", {
       method: "POST",
       body: JSON.stringify(body),
     }),
   me: () => request<{ user: AuthUser }>("/auth/me"),
-  createSession: () => request<{ session: SessionData }>("/sessions", { method: "POST" }),
+  createSession: (maxPlayers: number = 2) => request<{ session: SessionData }>("/sessions", { method: "POST", body: JSON.stringify({ maxPlayers }) }),
   joinSession: (code: string) =>
-    request<{ session: SessionData; role: "creator" | "joiner" }>(
+    request<{ session: SessionData; role: number }>(
       `/sessions/${code}/join`,
       { method: "POST" },
     ),
   getSession: (code: string) =>
-    request<{ session: SessionData; role: "creator" | "joiner" }>(`/sessions/${code}`),
+    request<{ session: SessionData; role: number }>(`/sessions/${code}`),
   endSession: (code: string) =>
     request<{ session: SessionData }>(`/sessions/${code}/end`, { method: "POST" }),
   saveDrawing: (code: string, imageData: string) =>
-    request<{ drawing: DrawingHistoryItem }>(`/sessions/${code}/save`, {
+    request<{ id: string }>(`/sessions/${code}/drawings`, {
       method: "POST",
       body: JSON.stringify({ imageData }),
     }),

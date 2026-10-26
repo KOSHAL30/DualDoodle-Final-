@@ -1,22 +1,24 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useLocation, useRoute } from "wouter";
 import type { Socket } from "socket.io-client";
 import { useAuth } from "@/lib/auth-context";
-import { api, type StrokeData } from "@/lib/api";
+import { api, type MessageData, type StrokeData } from "@/lib/api";
 import { getSocket, disconnectSocket } from "@/lib/socket";
+import { pointerToCanvasPoint } from "@/lib/canvas-coordinates";
+import { floodFillPixels } from "@/lib/canvas-flood-fill";
 import {
   Pen, Brush, Eraser, Square, Circle, Triangle, Minus,
-  PaintBucket, Undo2, Save, Image as ImageIcon, X,
-  Copy, Check, LogOut, Loader2, Users,
-} from "lucide-react";
+  PaintBucket, Pipette, Trash2, Undo2, Redo2, Save, Image as ImageIcon, X,
+  Copy, Check, LogOut, Loader2, Users, MessageCircle, Send,
+} from "@/lib/lucide-icons";
 
 type Tool =
   | "pen" | "brush" | "eraser"
   | "line" | "rectangle" | "circle" | "triangle"
-  | "fill";
+  | "fill" | "pipette";
 
-const CANVAS_W = 800;
-const CANVAS_H = 600;
+const CANVAS_W = 1200;
+const CANVAS_H = 900;
 
 const PALETTE = [
   "#1a1a2e", "#ffffff", "#ef4444", "#f97316", "#eab308",
@@ -25,7 +27,7 @@ const PALETTE = [
 
 interface PendingStroke {
   id: number;
-  side: "left" | "right";
+  side: number;
   tool: string;
   color: string;
   size: number;
@@ -40,31 +42,51 @@ export default function Room() {
   const { user } = useAuth();
   const [, navigate] = useLocation();
 
-  const [side, setSide] = useState<"left" | "right" | null>(null);
-  const [creatorUsername, setCreatorUsername] = useState<string>("");
-  const [joinerUsername, setJoinerUsername] = useState<string | null>(null);
+  const [side, setSide] = useState<number>(0);
+  const [players, setPlayers] = useState<Array<{userId: string; username: string; slot: number}>>([]);
+  const [maxPlayers, setMaxPlayers] = useState(2);
   const [presence, setPresence] = useState<Array<{ username: string; role?: string }>>([]);
   const [referenceImage, setReferenceImage] = useState<string | null>(null);
   const [showReference, setShowReference] = useState(false);
+  const [refOpacity, setRefOpacity] = useState(30);
+  const [refScale, setRefScale] = useState(100);
   const [status, setStatus] = useState<"connecting" | "ready" | "ended" | "error">("connecting");
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [saving, setSaving] = useState(false);
   const [savedToast, setSavedToast] = useState(false);
+  const [presenceToast, setPresenceToast] = useState<string | null>(null);
+  const [referenceUploading, setReferenceUploading] = useState(false);
+  const [canUndo, setCanUndo] = useState(false);
+  const [canRedo, setCanRedo] = useState(false);
+  const [chatOpen, setChatOpen] = useState(false);
+  const [chatMessages, setChatMessages] = useState<MessageData[]>([]);
+  const [chatInput, setChatInput] = useState("");
+  const [chatSending, setChatSending] = useState(false);
+  const [chatError, setChatError] = useState<string | null>(null);
+  const [unreadChatCount, setUnreadChatCount] = useState(0);
+  const chatOpenRef = useRef(chatOpen);
+  const chatBottomRef = useRef<HTMLDivElement>(null);
 
   const [tool, setTool] = useState<Tool>("pen");
   const [color, setColor] = useState("#1a1a2e");
   const [size, setSize] = useState(4);
 
-  const leftCanvasRef = useRef<HTMLCanvasElement>(null);
-  const rightCanvasRef = useRef<HTMLCanvasElement>(null);
+  const canvasRefs = useRef<Array<HTMLCanvasElement | null>>([null, null, null, null]);
   const previewCanvasRef = useRef<HTMLCanvasElement>(null);
+  const workspaceRef = useRef<HTMLDivElement>(null);
+  const [boardBox, setBoardBox] = useState({ width: 0, height: 0 });
+  const [workspaceWidth, setWorkspaceWidth] = useState(0);
+  const gridCols = maxPlayers > 2 || workspaceWidth === 0 || workspaceWidth >= 560 ? 2 : 1;
+  const gridRows = Math.ceil(maxPlayers / gridCols);
+  const visualSlots = gridCols * gridRows;
 
   const socketRef = useRef<Socket | null>(null);
   const strokesRef = useRef<StrokeData[]>([]);
+  const undoneStrokesRef = useRef<StrokeData[]>([]);
   const pendingRemoteRef = useRef<Map<string, PendingStroke>>(new Map());
   const drawingRef = useRef<{
-    side: "left" | "right";
+    side: number;
     tool: Tool;
     color: string;
     size: number;
@@ -75,25 +97,60 @@ export default function Room() {
     pendingPoints: Array<{ x: number; y: number }>;
   } | null>(null);
 
-  // Initial fetch + socket setup
+  function refreshHistoryAvailability() {
+    setCanUndo(Boolean(user && strokesRef.current.some((stroke) => stroke.userId === user.id)));
+    setCanRedo(Boolean(user && undoneStrokesRef.current.some((stroke) => stroke.userId === user.id)));
+  }
+
+  function refreshDrawingFromServer() {
+    api.getSession(code).then(({ session }) => {
+      strokesRef.current = session.strokes ?? [];
+      undoneStrokesRef.current = session.undoneStrokes ?? [];
+      refreshHistoryAvailability();
+      redrawAll();
+    }).catch((err) => {
+      setErrorMsg(err instanceof Error ? err.message : "Could not resync the room drawing");
+    });
+  }
+
+  function appendChatMessage(message: MessageData) {
+    setChatMessages((current) => {
+      const key = message.id ?? `${message.userId}:${message.ts}`;
+      if (current.some((entry) => (entry.id ?? `${entry.userId}:${entry.ts}`) === key)) return current;
+      return [...current, message].slice(-100);
+    });
+  }
+
+  useEffect(() => {
+    chatOpenRef.current = chatOpen;
+    if (chatOpen) setUnreadChatCount(0);
+  }, [chatOpen]);
+
+  useEffect(() => {
+    if (chatOpen) chatBottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [chatMessages, chatOpen]);
+
   useEffect(() => {
     if (!code) return;
     let cancelled = false;
+    let cleanupSocketListeners: (() => void) | undefined;
 
     api
       .joinSession(code)
       .then(({ session, role }) => {
         if (cancelled) return;
-        setSide(role === "creator" ? "left" : "right");
-        setCreatorUsername(session.creatorUsername);
-        setJoinerUsername(session.joinerUsername);
+        setSide(Number(role) || 0);
+        setPlayers(session.players ?? []);
+        setMaxPlayers(session.maxPlayers === 3 || session.maxPlayers === 4 ? session.maxPlayers : 2);
         setReferenceImage(session.referenceImage);
-        strokesRef.current = session.strokes;
+        strokesRef.current = session.strokes || [];
+        undoneStrokesRef.current = session.undoneStrokes || [];
+        refreshHistoryAvailability();
         if (session.status === "ended") {
           setStatus("ended");
           return;
         }
-        connectSocket();
+        cleanupSocketListeners = connectSocket();
       })
       .catch((err) => {
         if (cancelled) return;
@@ -105,17 +162,19 @@ export default function Room() {
       const socket = getSocket();
       socketRef.current = socket;
 
-      socket.emit("session:join", { code }, (resp: {
+      const onJoined = (resp: {
         ok: boolean;
         error?: string;
-        role?: "creator" | "joiner";
-        side?: "left" | "right";
+        role?: string;
+        side?: number;
         session?: {
-          creatorUsername: string;
-          joinerUsername: string | null;
+          maxPlayers: number;
+          players: Array<{userId: string; username: string; slot: number}>;
           status: string;
           referenceImage: string | null;
           strokes: StrokeData[];
+          undoneStrokes?: StrokeData[];
+          messages?: MessageData[];
         };
       }) => {
         if (!resp?.ok) {
@@ -123,89 +182,142 @@ export default function Room() {
           setErrorMsg(resp?.error || "Could not join room");
           return;
         }
-        setSide(resp.side || "left");
+        setSide(Number(resp.side) || 0);
         if (resp.session) {
-          setCreatorUsername(resp.session.creatorUsername);
-          setJoinerUsername(resp.session.joinerUsername);
+          setPlayers(resp.session.players ?? []);
+          setMaxPlayers(resp.session.maxPlayers === 3 || resp.session.maxPlayers === 4 ? resp.session.maxPlayers : 2);
           setReferenceImage(resp.session.referenceImage);
-          strokesRef.current = resp.session.strokes;
+          if (resp.session.referenceImage) setShowReference(true);
+          strokesRef.current = resp.session.strokes ?? [];
+          undoneStrokesRef.current = resp.session.undoneStrokes ?? [];
+          setChatMessages(resp.session.messages ?? []);
+          refreshHistoryAvailability();
           redrawAll();
           if (resp.session.status === "ended") {
             setStatus("ended");
             return;
           }
         }
+        setErrorMsg(null);
         setStatus("ready");
-      });
+      };
 
-      socket.on("presence:state", ({ present }: { present: Array<{ username: string; role?: string }> }) => {
+      const onConnect = () => {
+        setStatus("connecting");
+        socket.emit("session:join", { code }, onJoined);
+      };
+
+      const onDisconnect = () => {
+        setStatus("connecting");
+      };
+
+      const onConnectError = (err: Error) => {
+        setErrorMsg(`Connection error: ${err.message}`);
+      };
+
+      const onPresenceState = ({ present }: { present: Array<{ username: string; role?: string }> }) => {
         setPresence(present);
-      });
+      };
 
-      socket.on("presence:joined", () => {
-        // refresh session info
+      const onPresenceJoined = (payload?: { username?: string }) => {
+        if (payload?.username && payload.username !== user?.username) {
+          setPresenceToast(`${payload.username} joined the room`);
+          setTimeout(() => {
+            setPresenceToast((curr) => curr === `${payload.username} joined the room` ? null : curr);
+          }, 3500);
+        }
         api.getSession(code).then(({ session }) => {
-          setJoinerUsername(session.joinerUsername);
-        }).catch(() => {});
-      });
+          setPlayers(session.players ?? []);
+          setMaxPlayers(session.maxPlayers === 3 || session.maxPlayers === 4 ? session.maxPlayers : 2);
+        }).catch((err) => {
+          setErrorMsg(err instanceof Error ? err.message : "Could not refresh room members");
+        });
+      };
 
-      socket.on("draw:stroke-start", (s: PendingStroke) => {
+      const onStrokeStart = (s: PendingStroke) => {
         pendingRemoteRef.current.set(`${s.userId}`, { ...s, points: [...s.points] });
-      });
+      };
 
-      socket.on("draw:stroke-progress", (p: { points: Array<{ x: number; y: number }>; userId: string; side: "left" | "right" }) => {
+      const onStrokeProgress = (p: { points: Array<{ x: number; y: number }>; userId: string; side: number }) => {
         const pending = pendingRemoteRef.current.get(p.userId);
         if (pending) {
           pending.points.push(...p.points);
           drawPreview();
         }
-      });
-
-      socket.on("draw:stroke-end", (s: StrokeData) => {
+      };
+      const onStrokeEnd = (s: StrokeData) => {
         pendingRemoteRef.current.delete(s.userId);
         strokesRef.current.push(s);
-        redrawAll();
-      });
+        undoneStrokesRef.current = [];
+        refreshHistoryAvailability();
+        const canvas = canvasRefs.current[s.side];
+        const context = canvas?.getContext("2d");
+        if (context) drawStrokeOn(context, s);
+        drawPreview();
+      };
 
-      socket.on("draw:reset", ({ strokes }: { strokes: StrokeData[] }) => {
+      const onStrokesSync = ({ strokes, undoneStrokes }: { strokes: StrokeData[]; undoneStrokes?: StrokeData[] }) => {
         strokesRef.current = strokes;
+        undoneStrokesRef.current = undoneStrokes ?? [];
+        refreshHistoryAvailability();
         redrawAll();
-      });
+      };
 
-      socket.on("reference:updated", ({ imageData }: { imageData: string | null }) => {
+      const onReferenceUpdated = ({ imageData }: { imageData: string | null }) => {
         setReferenceImage(imageData);
-      });
+        if (imageData) setShowReference(true);
+      };
 
-      socket.on("session:ended", () => {
+      const onChatMessage = (message: MessageData) => {
+        appendChatMessage(message);
+        if (!chatOpenRef.current && message.userId !== user?.id) {
+          setUnreadChatCount((count) => count + 1);
+        }
+      };
+
+      const onSessionEnded = () => {
         setStatus("ended");
-      });
+      };
 
-      socket.on("connect_error", (err) => {
-        setErrorMsg(`Connection error: ${err.message}`);
-      });
+      socket.on("connect", onConnect);
+      socket.on("disconnect", onDisconnect);
+      socket.on("connect_error", onConnectError);
+      socket.on("presence:state", onPresenceState);
+      socket.on("presence:joined", onPresenceJoined);
+      socket.on("draw:stroke-start", onStrokeStart);
+      socket.on("draw:stroke-move", onStrokeProgress);
+      socket.on("draw:stroke-end", onStrokeEnd);
+      socket.on("draw:sync", onStrokesSync);
+      socket.on("reference:updated", onReferenceUpdated);
+      socket.on("chat:message", onChatMessage);
+      socket.on("session:ended", onSessionEnded);
+      if (socket.connected) onConnect();
+
+      return () => {
+        socket.off("connect", onConnect);
+        socket.off("disconnect", onDisconnect);
+        socket.off("connect_error", onConnectError);
+        socket.off("presence:state", onPresenceState);
+        socket.off("presence:joined", onPresenceJoined);
+        socket.off("draw:stroke-start", onStrokeStart);
+        socket.off("draw:stroke-move", onStrokeProgress);
+        socket.off("draw:stroke-end", onStrokeEnd);
+        socket.off("draw:sync", onStrokesSync);
+        socket.off("reference:updated", onReferenceUpdated);
+        socket.off("chat:message", onChatMessage);
+        socket.off("session:ended", onSessionEnded);
+      };
     }
 
     return () => {
       cancelled = true;
-      const s = socketRef.current;
-      if (s) {
-        s.off("presence:state");
-        s.off("presence:joined");
-        s.off("draw:stroke-start");
-        s.off("draw:stroke-progress");
-        s.off("draw:stroke-end");
-        s.off("draw:reset");
-        s.off("reference:updated");
-        s.off("session:ended");
-        s.off("connect_error");
-      }
+      cleanupSocketListeners?.();
       disconnectSocket();
       socketRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [code]);
 
-  // Render strokes onto canvas
   function drawStrokeOn(ctx: CanvasRenderingContext2D, s: { tool: string; color: string; size: number; points: Array<{ x: number; y: number }>; meta?: Record<string, unknown> }) {
     if (!s.points || s.points.length === 0) return;
     ctx.save();
@@ -226,10 +338,15 @@ export default function Room() {
       }
       ctx.beginPath();
       ctx.moveTo(s.points[0]!.x, s.points[0]!.y);
-      for (let i = 1; i < s.points.length; i++) {
-        ctx.lineTo(s.points[i]!.x, s.points[i]!.y);
+      if (s.points.length === 1) {
+        ctx.arc(s.points[0]!.x, s.points[0]!.y, Math.max(0.5, ctx.lineWidth / 2), 0, Math.PI * 2);
+        ctx.fill();
+      } else {
+        for (let i = 1; i < s.points.length; i++) {
+          ctx.lineTo(s.points[i]!.x, s.points[i]!.y);
+        }
+        ctx.stroke();
       }
-      ctx.stroke();
     } else if (s.tool === "line") {
       const a = s.points[0]!;
       const b = s.points[s.points.length - 1]!;
@@ -246,59 +363,32 @@ export default function Room() {
       const b = s.points[s.points.length - 1]!;
       const cx = (a.x + b.x) / 2;
       const cy = (a.y + b.y) / 2;
-      const rx = Math.abs(b.x - a.x) / 2;
-      const ry = Math.abs(b.y - a.y) / 2;
+      const r = Math.hypot(b.x - a.x, b.y - a.y) / 2;
       ctx.beginPath();
-      ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+      ctx.arc(cx, cy, r, 0, Math.PI * 2);
       ctx.stroke();
     } else if (s.tool === "triangle") {
       const a = s.points[0]!;
       const b = s.points[s.points.length - 1]!;
       ctx.beginPath();
       ctx.moveTo((a.x + b.x) / 2, a.y);
-      ctx.lineTo(a.x, b.y);
       ctx.lineTo(b.x, b.y);
+      ctx.lineTo(a.x, b.y);
       ctx.closePath();
       ctx.stroke();
     } else if (s.tool === "fill") {
-      const meta = s.meta as { x: number; y: number } | undefined;
-      if (meta) {
-        floodFill(ctx, Math.round(meta.x), Math.round(meta.y), s.color);
-      }
+      const p = s.points[0]!;
+      const c = hexToRgba(s.color);
+      floodFill(ctx, p.x, p.y, c);
     }
     ctx.restore();
   }
 
-  function floodFill(ctx: CanvasRenderingContext2D, x: number, y: number, hex: string) {
+  function floodFill(ctx: CanvasRenderingContext2D, x: number, y: number, fillColor: [number, number, number, number]) {
     const w = ctx.canvas.width;
     const h = ctx.canvas.height;
-    if (x < 0 || y < 0 || x >= w || y >= h) return;
     const img = ctx.getImageData(0, 0, w, h);
-    const data = img.data;
-    const idx = (y * w + x) * 4;
-    const target = [data[idx], data[idx + 1], data[idx + 2], data[idx + 3]];
-    const fill = hexToRgba(hex);
-    if (target[0] === fill[0] && target[1] === fill[1] && target[2] === fill[2] && target[3] === fill[3]) return;
-    const stack: number[] = [x, y];
-    const tol = 8;
-    while (stack.length) {
-      const cy = stack.pop()!;
-      const cx = stack.pop()!;
-      if (cx < 0 || cy < 0 || cx >= w || cy >= h) continue;
-      const i = (cy * w + cx) * 4;
-      if (
-        Math.abs(data[i]! - target[0]!) > tol ||
-        Math.abs(data[i + 1]! - target[1]!) > tol ||
-        Math.abs(data[i + 2]! - target[2]!) > tol ||
-        Math.abs(data[i + 3]! - target[3]!) > tol
-      ) continue;
-      data[i] = fill[0]!;
-      data[i + 1] = fill[1]!;
-      data[i + 2] = fill[2]!;
-      data[i + 3] = fill[3]!;
-      stack.push(cx + 1, cy, cx - 1, cy, cx, cy + 1, cx, cy - 1);
-    }
-    ctx.putImageData(img, 0, 0);
+    if (floodFillPixels(img.data, w, h, x, y, fillColor)) ctx.putImageData(img, 0, 0);
   }
 
   function hexToRgba(hex: string): [number, number, number, number] {
@@ -311,16 +401,14 @@ export default function Room() {
   }
 
   function redrawAll() {
-    const left = leftCanvasRef.current;
-    const right = rightCanvasRef.current;
-    if (!left || !right) return;
-    const lctx = left.getContext("2d");
-    const rctx = right.getContext("2d");
-    if (!lctx || !rctx) return;
-    lctx.clearRect(0, 0, left.width, left.height);
-    rctx.clearRect(0, 0, right.width, right.height);
+    canvasRefs.current.forEach(c => {
+      if (c) c.getContext("2d")?.clearRect(0, 0, c.width, c.height);
+    });
     for (const s of strokesRef.current) {
-      const ctx = s.side === "left" ? lctx : rctx;
+      const canvas = canvasRefs.current[s.side];
+      if (!canvas) continue;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) continue;
       drawStrokeOn(ctx, s);
     }
     drawPreview();
@@ -332,12 +420,12 @@ export default function Room() {
     const ctx = preview.getContext("2d");
     if (!ctx) return;
     ctx.clearRect(0, 0, preview.width, preview.height);
-    // Local pending
+    
     const local = drawingRef.current;
     if (local) {
       ctx.save();
-      const offset = local.side === "left" ? 0 : CANVAS_W;
-      ctx.translate(offset, 0);
+      const offset = (local.side % gridCols) * CANVAS_W;
+      ctx.translate(offset, Math.floor(local.side / gridCols) * CANVAS_H);
       drawStrokeOn(ctx, {
         tool: local.tool,
         color: local.color,
@@ -346,11 +434,11 @@ export default function Room() {
       });
       ctx.restore();
     }
-    // Remote pending
+
     for (const p of pendingRemoteRef.current.values()) {
       ctx.save();
-      const offset = p.side === "left" ? 0 : CANVAS_W;
-      ctx.translate(offset, 0);
+      const offset = (p.side % gridCols) * CANVAS_W;
+      ctx.translate(offset, Math.floor(p.side / gridCols) * CANVAS_H);
       drawStrokeOn(ctx, {
         tool: p.tool,
         color: p.color,
@@ -361,138 +449,222 @@ export default function Room() {
     }
   }
 
-  // Mouse / touch handlers per side
-  function getCanvasCoords(e: React.PointerEvent<HTMLCanvasElement>): { x: number; y: number } {
-    const canvas = e.currentTarget;
-    const rect = canvas.getBoundingClientRect();
-    const scaleX = canvas.width / rect.width;
-    const scaleY = canvas.height / rect.height;
-    return {
-      x: (e.clientX - rect.left) * scaleX,
-      y: (e.clientY - rect.top) * scaleY,
-    };
-  }
-
-  function onPointerDown(s: "left" | "right", e: React.PointerEvent<HTMLCanvasElement>) {
-    if (s !== side || status !== "ready" || !user) return;
-    e.currentTarget.setPointerCapture(e.pointerId);
-    const pt = getCanvasCoords(e);
-
-    if (tool === "fill") {
-      const stroke: StrokeData = {
-        side: s,
-        tool: "fill",
-        color,
-        size,
-        points: [pt],
-        meta: { x: pt.x, y: pt.y },
-        userId: user.id,
-        ts: Date.now(),
-      };
-      strokesRef.current.push(stroke);
-      redrawAll();
-      socketRef.current?.emit("draw:stroke-start", stroke);
-      socketRef.current?.emit("draw:stroke-end", stroke);
+  function onPointerDown(s: number, e: React.PointerEvent) {
+    if (tool === "pipette") {
+      const canvas = canvasRefs.current[s];
+      if (canvas) {
+        const rect = canvas.getBoundingClientRect();
+        const { x, y } = pointerToCanvasPoint(e.clientX, e.clientY, rect, CANVAS_W, CANVAS_H);
+        const ctx = canvas.getContext("2d");
+        if (ctx) {
+          const pixel = ctx.getImageData(x, y, 1, 1).data;
+          if (pixel[3] > 0) {
+            const hex = `#${((1 << 24) + (pixel[0] << 16) + (pixel[1] << 8) + pixel[2]).toString(16).slice(1)}`;
+            setColor(hex);
+          }
+        }
+      }
+      setTool("pen");
       return;
     }
+    if (s !== side || status !== "ready" || !user) return;
+    const canvas = canvasRefs.current[s];
+    if (!canvas) return;
+    try {
+      canvas.setPointerCapture(e.pointerId);
+    } catch {
+      // Ignore if pointer capture fails (e.g. synthetic event or disconnected pointer)
+    }
+    const rect = canvas.getBoundingClientRect();
+    const { x, y } = pointerToCanvasPoint(e.clientX, e.clientY, rect, CANVAS_W, CANVAS_H);
 
     drawingRef.current = {
       side: s,
       tool,
       color,
       size,
-      startX: pt.x,
-      startY: pt.y,
-      points: [pt],
-      lastEmit: 0,
-      pendingPoints: [],
+      startX: x,
+      startY: y,
+      points: [{ x, y }],
+      lastEmit: Date.now(),
+      pendingPoints: [{ x, y }],
     };
+
     socketRef.current?.emit("draw:stroke-start", {
-      side: s,
+      id: Date.now(),
       tool,
       color,
       size,
-      points: [pt],
-      userId: user.id,
+      points: [{ x, y }],
     });
     drawPreview();
   }
 
-  function onPointerMove(s: "left" | "right", e: React.PointerEvent<HTMLCanvasElement>) {
+  function onPointerMove(s: number, e: React.PointerEvent) {
     const d = drawingRef.current;
-    if (!d || d.side !== s) return;
-    const pt = getCanvasCoords(e);
-    if (d.tool === "pen" || d.tool === "brush" || d.tool === "eraser") {
-      d.points.push(pt);
-      d.pendingPoints.push(pt);
-    } else {
-      d.points = [{ x: d.startX, y: d.startY }, pt];
-    }
-    drawPreview();
-    const now = performance.now();
+    if (!d || d.side !== s || !user) return;
+    const canvas = canvasRefs.current[s];
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const { x, y } = pointerToCanvasPoint(e.clientX, e.clientY, rect, CANVAS_W, CANVAS_H);
+
+    d.points.push({ x, y });
+    d.pendingPoints.push({ x, y });
+
+    const now = Date.now();
     if (now - d.lastEmit > 30) {
-      if (d.tool === "pen" || d.tool === "brush" || d.tool === "eraser") {
-        if (d.pendingPoints.length) {
-          socketRef.current?.emit("draw:stroke-progress", { points: d.pendingPoints });
-          d.pendingPoints = [];
-        }
-      } else {
-        socketRef.current?.emit("draw:stroke-progress", { points: [pt] });
+      if (d.pendingPoints.length > 0) {
+        socketRef.current?.emit("draw:stroke-move", {
+          points: d.pendingPoints,
+        });
+        d.pendingPoints = [];
       }
       d.lastEmit = now;
     }
+    drawPreview();
   }
 
-  function onPointerUp(s: "left" | "right", e: React.PointerEvent<HTMLCanvasElement>) {
+  function onPointerUp(s: number, e: React.PointerEvent) {
     const d = drawingRef.current;
     if (!d || d.side !== s || !user) return;
-    try { e.currentTarget.releasePointerCapture(e.pointerId); } catch {}
-    const stroke: StrokeData = {
-      side: d.side,
+    const canvas = canvasRefs.current[s];
+    const rect = canvas?.getBoundingClientRect();
+    if (rect) {
+      const point = pointerToCanvasPoint(e.clientX, e.clientY, rect, CANVAS_W, CANVAS_H);
+      const last = d.points[d.points.length - 1];
+      if (!last || last.x !== point.x || last.y !== point.y) d.points.push(point);
+    }
+
+    const sData = {
       tool: d.tool,
       color: d.color,
       size: d.size,
       points: d.points,
-      userId: user.id,
-      ts: Date.now(),
     };
-    strokesRef.current.push(stroke);
+    const localStroke: StrokeData = { ...sData, side: s, userId: user.id, ts: Date.now() };
+    strokesRef.current.push(localStroke);
+    undoneStrokesRef.current = [];
+    refreshHistoryAvailability();
+    
+    const targetCanvas = canvasRefs.current[d.side];
+    const realCtx = targetCanvas?.getContext("2d");
+    if (realCtx) {
+      drawStrokeOn(realCtx, sData);
+    }
+    
+    try {
+      canvas?.releasePointerCapture(e.pointerId);
+    } catch {
+      // Ignore if pointer capture release fails
+    }
+
     drawingRef.current = null;
-    redrawAll();
-    socketRef.current?.emit("draw:stroke-end", stroke);
+    drawPreview();
+
+    const socket = socketRef.current;
+    if (socket?.connected) {
+      socket.timeout(10000).emit("draw:stroke-end", sData, (err: Error | null, response: { ok: boolean; error?: string }) => {
+        if (err || !response?.ok) {
+          strokesRef.current = strokesRef.current.filter((stroke) => stroke !== localStroke);
+          refreshHistoryAvailability();
+          redrawAll();
+          setErrorMsg(response?.error || "Stroke could not be saved. Please try again.");
+          refreshDrawingFromServer();
+        }
+      });
+    } else {
+      strokesRef.current = strokesRef.current.filter((stroke) => stroke !== localStroke);
+      refreshHistoryAvailability();
+      redrawAll();
+      setErrorMsg("Room connection lost. Reconnect before drawing.");
+      refreshDrawingFromServer();
+    }
   }
 
-  // Tool actions
   const onUndo = () => {
-    if (!user) return;
-    // local optimistic: remove last stroke by this user
-    for (let i = strokesRef.current.length - 1; i >= 0; i--) {
-      if (strokesRef.current[i]!.userId === user.id) {
-        strokesRef.current.splice(i, 1);
-        break;
-      }
+    const socket = socketRef.current;
+    if (!socket?.connected) {
+      setErrorMsg("Room connection lost. Reconnect before undoing a stroke.");
+      return;
     }
-    redrawAll();
-    socketRef.current?.emit("draw:undo", {});
+    socket.timeout(8000).emit("draw:undo", {}, (err: Error | null, response: { ok: boolean; error?: string }) => {
+      if (err || !response?.ok) setErrorMsg(response?.error || "Undo request timed out. Please try again.");
+    });
+  };
+
+  const onRedo = () => {
+    const socket = socketRef.current;
+    if (!socket?.connected) {
+      setErrorMsg("Room connection lost. Reconnect before redoing a stroke.");
+      return;
+    }
+    socket.timeout(8000).emit("draw:redo", {}, (err: Error | null, response: { ok: boolean; error?: string }) => {
+      if (err || !response?.ok) setErrorMsg(response?.error || "Redo request timed out. Please try again.");
+    });
+  };
+
+  const onClearSection = () => {
+    if (!canUndo) return;
+    if (!confirm("Clear your section of the canvas? (You can undo this)")) return;
+    const socket = socketRef.current;
+    if (!socket?.connected) {
+      setErrorMsg("Room connection lost. Reconnect before clearing your section.");
+      return;
+    }
+    socket.timeout(8000).emit("draw:clear", {}, (err: Error | null, response: { ok: boolean; error?: string }) => {
+      if (err || !response?.ok) setErrorMsg(response?.error || "Clear request timed out. Please try again.");
+    });
+  };
+
+  const onSendChat = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const text = chatInput.trim();
+    const socket = socketRef.current;
+    if (!text || chatSending) return;
+    if (!socket?.connected) {
+      setChatError("Reconnecting. Your message was not sent.");
+      return;
+    }
+
+    setChatSending(true);
+    setChatError(null);
+    socket.timeout(8000).emit("chat:message", { text }, (err: Error | null, response: { ok: boolean; error?: string }) => {
+      setChatSending(false);
+      if (err || !response?.ok) {
+        setChatError(response?.error || "Message could not be sent. Please try again.");
+        return;
+      }
+      setChatInput("");
+    });
   };
 
   const onSave = async () => {
     setSaving(true);
     try {
       const combined = document.createElement("canvas");
-      combined.width = CANVAS_W * 2;
-      combined.height = CANVAS_H;
+      const cols = maxPlayers > 2 ? 2 : maxPlayers;
+      const rows = maxPlayers > 2 ? 2 : 1;
+      combined.width = CANVAS_W * cols;
+      combined.height = CANVAS_H * rows;
       const ctx = combined.getContext("2d")!;
       ctx.fillStyle = "#ffffff";
       ctx.fillRect(0, 0, combined.width, combined.height);
-      if (leftCanvasRef.current) ctx.drawImage(leftCanvasRef.current, 0, 0);
-      if (rightCanvasRef.current) ctx.drawImage(rightCanvasRef.current, CANVAS_W, 0);
-      // divider
+      
+      for (let i = 0; i < maxPlayers; i++) {
+        const c = canvasRefs.current[i];
+        if (c) ctx.drawImage(c, (i % 2) * CANVAS_W, Math.floor(i / 2) * CANVAS_H);
+      }
+      
+      // dividers
       ctx.fillStyle = "rgba(0,0,0,0.08)";
-      ctx.fillRect(CANVAS_W - 1, 0, 2, CANVAS_H);
+      ctx.fillRect(CANVAS_W - 1, 0, 2, combined.height);
+      if (maxPlayers > 2) {
+        const dividerWidth = maxPlayers === 3 ? CANVAS_W : combined.width;
+        ctx.fillRect(0, CANVAS_H - 1, dividerWidth, 2);
+      }
+
       const dataUrl = combined.toDataURL("image/png");
       await api.saveDrawing(code, dataUrl);
-      // Trigger download
       const a = document.createElement("a");
       a.href = dataUrl;
       a.download = `dual-doodle-${code}.png`;
@@ -507,10 +679,19 @@ export default function Room() {
   };
 
   const onEnd = async () => {
-    if (!confirm("End this session for both of you?")) return;
-    socketRef.current?.emit("session:end");
-    try { await api.endSession(code); } catch {}
-    setStatus("ended");
+    if (!confirm("End this session for everyone?")) return;
+    const socket = socketRef.current;
+    if (!socket?.connected) {
+      setErrorMsg("The room connection is unavailable. Reconnect before ending the session.");
+      return;
+    }
+    socket.timeout(8000).emit("session:end", {}, (err: Error | null, response: { ok: boolean; error?: string }) => {
+      if (err || !response?.ok) {
+        setErrorMsg(response?.error || "Could not end this session. Please retry.");
+        return;
+      }
+      setStatus("ended");
+    });
   };
 
   const onCopyLink = async () => {
@@ -519,44 +700,171 @@ export default function Room() {
       await navigator.clipboard.writeText(url);
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
-    } catch {}
+    } catch {
+      setErrorMsg("Could not copy the invite link. Copy the room URL from your browser instead.");
+    }
   };
 
-  const onUploadReference = (file: File) => {
+  const onUploadReference = async (file: File) => {
+    const allowedTypes = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
+    if (!allowedTypes.has(file.type.toLowerCase())) {
+      setErrorMsg("Choose a PNG, JPEG, WebP, or GIF image.");
+      return;
+    }
     if (file.size > 3_500_000) {
       setErrorMsg("Image too large (max 3.5MB)");
       return;
     }
-    const reader = new FileReader();
-    reader.onload = () => {
-      const dataUrl = reader.result as string;
-      socketRef.current?.emit("reference:set", { imageData: dataUrl }, (resp: { ok: boolean; error?: string }) => {
-        if (!resp?.ok) setErrorMsg(resp?.error || "Failed to set reference");
+    const socket = socketRef.current;
+    if (!socket?.connected) {
+      setErrorMsg("Reconnect to the room before uploading a reference.");
+      return;
+    }
+
+    setReferenceUploading(true);
+    setErrorMsg(null);
+    const objectUrl = URL.createObjectURL(file);
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const image = new Image();
+        image.onload = () => resolve();
+        image.onerror = () => reject(new Error("This image could not be decoded."));
+        image.src = objectUrl;
       });
-    };
-    reader.readAsDataURL(file);
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => typeof reader.result === "string"
+          ? resolve(reader.result)
+          : reject(new Error("Could not read the selected image."));
+        reader.onerror = () => reject(reader.error ?? new Error("Could not read the selected image."));
+        reader.readAsDataURL(file);
+      });
+      const response = await new Promise<{ ok: boolean; error?: string }>((resolve, reject) => {
+        socket.timeout(10000).emit("reference:set", { imageData: dataUrl }, (err: Error | null, result: { ok: boolean; error?: string }) => {
+          if (err) reject(new Error("The reference upload timed out. Please try again."));
+          else resolve(result);
+        });
+      });
+      if (!response.ok) throw new Error(response.error || "Failed to set reference");
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : "Failed to upload reference");
+    } finally {
+      URL.revokeObjectURL(objectUrl);
+      setReferenceUploading(false);
+    }
   };
 
   const onClearReference = () => {
-    socketRef.current?.emit("reference:set", { imageData: null });
+    const socket = socketRef.current;
+    if (!socket?.connected) {
+      setErrorMsg("Reconnect to the room before clearing the reference.");
+      return;
+    }
+    socket.timeout(8000).emit("reference:set", { imageData: null }, (err: Error | null, response: { ok: boolean; error?: string }) => {
+      if (err || !response?.ok) setErrorMsg(response?.error || "Could not clear the reference.");
+    });
   };
 
-  // Resize redraw on mount
   useEffect(() => {
-    redrawAll();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    const el = workspaceRef.current;
+    if (!el) return;
+    const aspect = (CANVAS_W * gridCols) / (CANVAS_H * gridRows);
+    const apply = () => {
+      const w = el.clientWidth;
+      const h = el.clientHeight;
+      if (w <= 0 || h <= 0) return;
+      setWorkspaceWidth(w);
+      let width = w;
+      let height = width / aspect;
+      if (height > h) {
+        height = h;
+        width = height * aspect;
+      }
+      setBoardBox({ width: Math.max(1, Math.floor(width)), height: Math.max(1, Math.floor(height)) });
+    };
+    apply();
+    const ro = new ResizeObserver(apply);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [gridCols, gridRows, status]);
 
-  const tools: { key: Tool; label: string; Icon: typeof Pen }[] = useMemo(() => [
-    { key: "pen", label: "Pen", Icon: Pen },
-    { key: "brush", label: "Brush", Icon: Brush },
-    { key: "eraser", label: "Eraser", Icon: Eraser },
-    { key: "line", label: "Line", Icon: Minus },
-    { key: "rectangle", label: "Rectangle", Icon: Square },
-    { key: "circle", label: "Circle", Icon: Circle },
-    { key: "triangle", label: "Triangle", Icon: Triangle },
-    { key: "fill", label: "Fill", Icon: PaintBucket },
+  useEffect(() => {
+    if (status !== "ready" && status !== "connecting") return;
+    const id = requestAnimationFrame(() => redrawAll());
+    return () => cancelAnimationFrame(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status, maxPlayers]);
+
+  const tools: { key: Tool; label: string; shortcut: string; Icon: typeof Pen }[] = useMemo(() => [
+    { key: "pen", label: "Pen", shortcut: "P", Icon: Pen },
+    { key: "brush", label: "Brush", shortcut: "B", Icon: Brush },
+    { key: "eraser", label: "Eraser", shortcut: "E", Icon: Eraser },
+    { key: "line", label: "Line", shortcut: "L", Icon: Minus },
+    { key: "rectangle", label: "Rectangle", shortcut: "R", Icon: Square },
+    { key: "circle", label: "Circle", shortcut: "C", Icon: Circle },
+    { key: "triangle", label: "Triangle", shortcut: "T", Icon: Triangle },
+    { key: "fill", label: "Fill", shortcut: "F", Icon: PaintBucket },
+    { key: "pipette", label: "Eyedropper", shortcut: "I", Icon: Pipette },
   ], []);
+
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
+        return;
+      }
+      const isMac = navigator.platform.toUpperCase().indexOf("MAC") >= 0;
+      const isUndo = (isMac ? e.metaKey : e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === "z";
+      const isRedo =
+        ((isMac ? e.metaKey : e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "z") ||
+        (!isMac && e.ctrlKey && e.key.toLowerCase() === "y");
+
+      if (isUndo) {
+        e.preventDefault();
+        if (canUndo && status === "ready") onUndo();
+        return;
+      }
+      if (isRedo) {
+        e.preventDefault();
+        if (canRedo && status === "ready") onRedo();
+        return;
+      }
+
+      if (!e.ctrlKey && !e.metaKey && !e.altKey) {
+        switch (e.key.toLowerCase()) {
+          case "p":
+            setTool("pen");
+            break;
+          case "b":
+            setTool("brush");
+            break;
+          case "e":
+            setTool("eraser");
+            break;
+          case "l":
+            setTool("line");
+            break;
+          case "r":
+            setTool("rectangle");
+            break;
+          case "c":
+            setTool("circle");
+            break;
+          case "t":
+            setTool("triangle");
+            break;
+          case "f":
+            setTool("fill");
+            break;
+          case "i":
+            setTool("pipette");
+            break;
+        }
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [canUndo, canRedo, status]);
 
   if (status === "error") {
     return (
@@ -595,8 +903,8 @@ export default function Room() {
   }
 
   return (
-    <div className="dd-bg-gradient min-h-screen flex flex-col">
-      <header className="border-b border-border/60 bg-background/70 backdrop-blur sticky top-0 z-20">
+    <div className="dd-bg-gradient h-dvh max-h-dvh min-h-0 min-w-0 w-full max-w-full flex flex-col overflow-hidden">
+      <header className="border-b border-border/60 bg-background/70 backdrop-blur shrink-0 z-20">
         <div className="max-w-[1400px] mx-auto px-5 py-3 flex flex-wrap items-center gap-3 justify-between">
           <div className="flex items-center gap-3">
             <button
@@ -623,8 +931,22 @@ export default function Room() {
           <div className="flex items-center gap-3">
             <div className="flex items-center gap-2 text-sm">
               <Users className="w-4 h-4 text-muted-foreground" />
-              <span className="text-muted-foreground">{presence.length}/2</span>
+              <span className="text-muted-foreground">{presence.length}/{maxPlayers}</span>
             </div>
+            <button
+              type="button"
+              onClick={() => setChatOpen((open) => !open)}
+              aria-expanded={chatOpen}
+              aria-controls="room-chat"
+              className="h-9 px-3 rounded-lg border border-border bg-card hover:bg-muted transition flex items-center gap-1.5 text-sm"
+            >
+              <MessageCircle className="w-4 h-4" /> Chat
+              {unreadChatCount > 0 && (
+                <span className="min-w-5 h-5 px-1 rounded-full bg-primary text-primary-foreground text-xs flex items-center justify-center" aria-label={`${unreadChatCount} unread messages`}>
+                  {unreadChatCount > 9 ? "9+" : unreadChatCount}
+                </span>
+              )}
+            </button>
             {status === "connecting" && (
               <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
                 <Loader2 className="w-3.5 h-3.5 animate-spin" /> Connecting…
@@ -654,19 +976,19 @@ export default function Room() {
         </div>
       </header>
 
-      <div className="flex-1 max-w-[1400px] mx-auto w-full px-5 py-5 grid lg:grid-cols-[260px_1fr] gap-5">
-        {/* Toolbar */}
-        <aside className="dd-card p-4 h-fit lg:sticky lg:top-[80px] space-y-5">
+      <div className="flex-1 min-h-0 min-w-0 overflow-hidden">
+      <div className="h-full min-h-0 min-w-0 max-w-[1600px] mx-auto w-full px-4 py-4 grid grid-cols-1 grid-rows-[minmax(0,30vh)_minmax(0,1fr)] sm:grid-rows-[minmax(0,36vh)_minmax(0,1fr)] lg:grid-cols-[260px_minmax(0,1fr)] lg:grid-rows-1 gap-4 overflow-hidden">
+        <aside className="dd-card p-4 space-y-5 min-h-0 min-w-0 overflow-y-auto max-h-[30vh] sm:max-h-[36vh] lg:max-h-none">
           <div>
             <div className="text-xs uppercase tracking-wider text-muted-foreground mb-2 font-semibold">Tools</div>
-            <div className="grid grid-cols-4 gap-1.5">
-              {tools.map(({ key, label, Icon }) => (
+            <div className="grid grid-cols-5 gap-1.5">
+              {tools.map(({ key, label, shortcut, Icon }) => (
                 <button
                   key={key}
                   onClick={() => setTool(key)}
                   data-active={tool === key}
                   className="dd-tool-btn"
-                  title={label}
+                  title={`${label} (${shortcut})`}
                 >
                   <Icon className="w-4 h-4" />
                 </button>
@@ -714,6 +1036,16 @@ export default function Room() {
               onChange={(e) => setSize(Number(e.target.value))}
               className="w-full accent-primary"
             />
+            <div className="mt-2 h-10 rounded-lg border border-border/70 bg-muted/40 flex items-center justify-center overflow-hidden">
+              <div
+                className="rounded-full transition-all shrink-0"
+                style={{
+                  width: `${size}px`,
+                  height: `${size}px`,
+                  backgroundColor: tool === "eraser" ? "hsl(var(--muted-foreground))" : color,
+                }}
+              />
+            </div>
           </div>
 
           <div>
@@ -721,31 +1053,71 @@ export default function Room() {
             <div className="space-y-1.5">
               <button
                 onClick={onUndo}
-                className="w-full h-9 rounded-lg border border-border bg-card hover:bg-muted transition flex items-center gap-2 px-3 text-sm"
+                disabled={!canUndo || status !== "ready"}
+                className="w-full h-9 rounded-lg border border-border bg-card hover:bg-muted transition flex items-center gap-2 px-3 text-sm disabled:opacity-45 disabled:cursor-not-allowed"
+                title="Undo (Ctrl+Z)"
               >
                 <Undo2 className="w-4 h-4" /> Undo my last
               </button>
-              <label className="w-full h-9 rounded-lg border border-border bg-card hover:bg-muted transition flex items-center gap-2 px-3 text-sm cursor-pointer">
-                <ImageIcon className="w-4 h-4" /> Upload reference
+              <button
+                type="button"
+                onClick={onRedo}
+                disabled={!canRedo || status !== "ready"}
+                className="w-full h-9 rounded-lg border border-border bg-card hover:bg-muted transition flex items-center gap-2 px-3 text-sm disabled:opacity-45 disabled:cursor-not-allowed"
+                title="Redo (Ctrl+Y)"
+              >
+                <Redo2 className="w-4 h-4" /> Redo my last
+              </button>
+              <button
+                type="button"
+                onClick={onClearSection}
+                disabled={!canUndo || status !== "ready"}
+                className="w-full h-9 rounded-lg border border-border bg-card hover:bg-destructive/10 hover:text-destructive hover:border-destructive/40 transition flex items-center gap-2 px-3 text-sm disabled:opacity-45 disabled:cursor-not-allowed"
+                title="Clear all drawings on your side"
+              >
+                <Trash2 className="w-4 h-4" /> Clear my section
+              </button>
+              <label className={`w-full h-9 rounded-lg border border-border bg-card hover:bg-muted transition flex items-center gap-2 px-3 text-sm ${referenceUploading ? "opacity-50 cursor-wait" : "cursor-pointer"}`} aria-disabled={referenceUploading}>
+                <ImageIcon className="w-4 h-4" /> {referenceUploading ? "Validating reference…" : "Upload reference"}
                 <input
                   type="file"
-                  accept="image/*"
+                  accept="image/png,image/jpeg,image/webp,image/gif"
                   className="hidden"
+                  disabled={referenceUploading || status !== "ready"}
                   onChange={(e) => {
                     const f = e.target.files?.[0];
-                    if (f) onUploadReference(f);
+                    if (f) void onUploadReference(f);
                     e.target.value = "";
                   }}
                 />
               </label>
+              <p className="text-[11px] text-muted-foreground">Reference images are shared with everyone in the room.</p>
               {referenceImage && (
                 <>
                   <button
                     onClick={() => setShowReference((v) => !v)}
-                    className="w-full h-9 rounded-lg border border-border bg-card hover:bg-muted transition flex items-center gap-2 px-3 text-sm"
+                    className="w-full h-9 rounded-lg border border-border bg-card hover:bg-muted transition flex items-center justify-center text-sm font-medium"
                   >
                     {showReference ? "Hide" : "Show"} reference
                   </button>
+                  {showReference && (
+                    <div className="px-1 py-2 space-y-3">
+                      <div>
+                        <div className="flex justify-between text-[10px] uppercase tracking-wider text-muted-foreground mb-1 font-semibold">
+                          <span>Opacity</span>
+                          <span>{refOpacity}%</span>
+                        </div>
+                        <input type="range" min={5} max={100} value={refOpacity} onChange={(e) => setRefOpacity(Number(e.target.value))} className="w-full accent-primary h-1.5 cursor-pointer" />
+                      </div>
+                      <div>
+                        <div className="flex justify-between text-[10px] uppercase tracking-wider text-muted-foreground mb-1 font-semibold">
+                          <span>Zoom</span>
+                          <span>{refScale}%</span>
+                        </div>
+                        <input type="range" min={10} max={300} value={refScale} onChange={(e) => setRefScale(Number(e.target.value))} className="w-full accent-primary h-1.5 cursor-pointer" />
+                      </div>
+                    </div>
+                  )}
                   <button
                     onClick={onClearReference}
                     className="w-full h-9 rounded-lg border border-border bg-card hover:bg-muted transition flex items-center gap-2 px-3 text-sm text-destructive"
@@ -760,100 +1132,159 @@ export default function Room() {
           <div className="border-t border-border pt-4">
             <div className="text-xs uppercase tracking-wider text-muted-foreground mb-2 font-semibold">Players</div>
             <div className="space-y-1.5 text-sm">
-              <div className="flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-primary" />
-                <span className="font-medium">{creatorUsername}</span>
-                <span className="text-xs text-muted-foreground ml-auto">left</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className={`w-2 h-2 rounded-full ${joinerUsername ? "bg-accent" : "bg-muted-foreground/30"}`} />
-                <span className={`font-medium ${joinerUsername ? "" : "text-muted-foreground"}`}>
-                  {joinerUsername || "Waiting for partner…"}
-                </span>
-                <span className="text-xs text-muted-foreground ml-auto">right</span>
-              </div>
+              {Array.from({ length: maxPlayers }).map((_, i) => {
+                const p = (players || []).find(x => x.slot === i);
+                return (
+                  <div key={i} className="flex items-center gap-2">
+                    <span className={`w-2 h-2 rounded-full ${p ? "bg-primary" : "bg-muted-foreground/30"}`} />
+                    <span className={`font-medium ${p ? "" : "text-muted-foreground"}`}>
+                      {p ? p.username : "Empty slot"}
+                    </span>
+                    <span className="text-xs text-muted-foreground ml-auto">P{i+1}</span>
+                  </div>
+                );
+              })}
             </div>
           </div>
         </aside>
 
-        {/* Canvas area */}
-        <section className="space-y-3">
+        <section className="relative flex flex-col gap-3 min-h-0 min-w-0 overflow-hidden">
           {errorMsg && (
-            <div className="text-sm text-destructive bg-destructive/10 border border-destructive/30 rounded-lg p-3 flex items-center justify-between">
+            <div className="text-sm text-destructive bg-destructive/10 border border-destructive/30 rounded-lg p-3 flex items-center justify-between shrink-0">
               <span>{errorMsg}</span>
               <button onClick={() => setErrorMsg(null)} className="dd-tool-btn !w-7 !h-7"><X className="w-3.5 h-3.5" /></button>
             </div>
           )}
           {savedToast && (
-            <div className="text-sm bg-primary/10 text-primary border border-primary/30 rounded-lg p-3">
+            <div className="text-sm bg-primary/10 text-primary border border-primary/30 rounded-lg p-3 shrink-0">
               Saved to your history and downloaded.
             </div>
           )}
+          {presenceToast && (
+            <div className="text-sm bg-primary/15 text-primary border border-primary/30 rounded-lg px-3 py-2 shrink-0 flex items-center gap-2">
+              <Users className="w-4 h-4 shrink-0" />
+              <span>{presenceToast}</span>
+            </div>
+          )}
 
-          <div className="dd-card p-3 canvas-shadow relative">
+          <div className="dd-card p-3 canvas-shadow flex-1 min-h-0 min-w-0 flex flex-col overflow-hidden">
+            <div ref={workspaceRef} className="relative flex-1 min-h-0 min-w-0 flex items-center justify-center overflow-hidden">
             <div
-              className="relative w-full bg-white rounded-lg overflow-hidden mx-auto"
-              style={{ aspectRatio: `${CANVAS_W * 2} / ${CANVAS_H}`, maxWidth: "100%" }}
+              className="relative bg-white rounded-lg overflow-hidden shrink-0"
+              style={{
+                width: boardBox.width ? `${boardBox.width}px` : "100%",
+                height: boardBox.height ? `${boardBox.height}px` : "100%",
+                maxWidth: "100%",
+                maxHeight: "100%",
+              }}
             >
-              {/* Reference background overlay */}
               {referenceImage && showReference && (
                 <img
                   src={referenceImage}
                   alt="reference"
-                  className="absolute inset-0 w-full h-full object-contain opacity-30 pointer-events-none"
+                  className="absolute inset-0 w-full h-full object-contain pointer-events-none"
+                  style={{
+                    opacity: refOpacity / 100,
+                    transform: `scale(${refScale / 100})`,
+                    transformOrigin: "center center"
+                  }}
                 />
               )}
 
-              {/* Two halves */}
-              <div className="absolute inset-0 grid grid-cols-2">
-                <div className="relative border-r border-dashed border-border">
-                  <canvas
-                    ref={leftCanvasRef}
-                    width={CANVAS_W}
-                    height={CANVAS_H}
-                    className="absolute inset-0 w-full h-full"
-                    style={{ touchAction: "none", cursor: side === "left" ? "crosshair" : "not-allowed" }}
-                    onPointerDown={(e) => onPointerDown("left", e)}
-                    onPointerMove={(e) => onPointerMove("left", e)}
-                    onPointerUp={(e) => onPointerUp("left", e)}
-                    onPointerLeave={(e) => onPointerUp("left", e)}
-                  />
-                  <div className="absolute top-2 left-2 text-xs px-2 py-0.5 rounded-full bg-background/80 backdrop-blur border border-border font-medium">
-                    {side === "left" ? "You" : creatorUsername}
-                  </div>
-                </div>
-                <div className="relative">
-                  <canvas
-                    ref={rightCanvasRef}
-                    width={CANVAS_W}
-                    height={CANVAS_H}
-                    className="absolute inset-0 w-full h-full"
-                    style={{ touchAction: "none", cursor: side === "right" ? "crosshair" : "not-allowed" }}
-                    onPointerDown={(e) => onPointerDown("right", e)}
-                    onPointerMove={(e) => onPointerMove("right", e)}
-                    onPointerUp={(e) => onPointerUp("right", e)}
-                    onPointerLeave={(e) => onPointerUp("right", e)}
-                  />
-                  <div className="absolute top-2 right-2 text-xs px-2 py-0.5 rounded-full bg-background/80 backdrop-blur border border-border font-medium">
-                    {side === "right" ? "You" : (joinerUsername || "Waiting…")}
-                  </div>
-                </div>
+              <div className={`absolute inset-0 grid min-h-0 min-w-0 ${maxPlayers > 2 ? "grid-cols-2 grid-rows-2" : gridCols === 1 ? "grid-cols-1 grid-rows-2" : "grid-cols-2 grid-rows-1"}`}>
+                {Array.from({ length: visualSlots }).map((_, i) => {
+                  const p = (players ?? []).find((x) => x.slot === i);
+                  const isPlayable = i < maxPlayers;
+                  return (
+                    <div
+                      key={i}
+                      className={`relative min-h-0 min-w-0 overflow-hidden ${gridCols > 1 && i % gridCols === 0 ? "border-r" : ""} ${gridRows > 1 && i < gridCols * (gridRows - 1) ? "border-b" : ""} border-dashed border-border ${isPlayable ? "bg-transparent" : "bg-muted/40"}`}
+                    >
+                      {isPlayable ? (
+                        <canvas
+                          ref={(el) => { canvasRefs.current[i] = el; }}
+                          width={CANVAS_W}
+                          height={CANVAS_H}
+                          className="absolute inset-0 w-full h-full max-w-full max-h-full"
+                          style={{ touchAction: "none", cursor: tool === "pipette" ? "crosshair" : side === i ? "crosshair" : "not-allowed" }}
+                          onPointerDown={(e) => onPointerDown(i, e)}
+                          onPointerMove={(e) => onPointerMove(i, e)}
+                          onPointerUp={(e) => onPointerUp(i, e)}
+                          onPointerCancel={(e) => onPointerUp(i, e)}
+                        />
+                      ) : (
+                        <div className="absolute inset-0 flex items-center justify-center text-xs text-muted-foreground">
+                          Empty slot
+                        </div>
+                      )}
+                      <div className="absolute top-2 left-2 text-xs px-2 py-0.5 rounded-full bg-background/80 backdrop-blur border border-border font-medium z-10">
+                        {isPlayable ? (side === i ? "You" : (p ? p.username : "Waiting…")) : "Unused"}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
 
-              {/* Preview overlay (in-progress strokes) */}
               <canvas
                 ref={previewCanvasRef}
-                width={CANVAS_W * 2}
-                height={CANVAS_H}
-                className="absolute inset-0 w-full h-full pointer-events-none"
+                width={CANVAS_W * gridCols}
+                height={CANVAS_H * gridRows}
+                className="absolute inset-0 w-full h-full max-w-full max-h-full pointer-events-none"
               />
             </div>
-
-            <div className="mt-3 text-xs text-muted-foreground text-center">
-              You draw on the <span className="font-semibold text-foreground">{side === "left" ? "left" : "right"}</span> half. The dashed line is the divider.
+            </div>
+            <div className="mt-3 text-xs text-muted-foreground text-center shrink-0">
+              You draw on your assigned section. The dashed line is the divider.
             </div>
           </div>
+          {chatOpen && (
+            <aside id="room-chat" aria-label="Room chat" className="absolute right-3 bottom-3 z-30 dd-card flex flex-col overflow-hidden shadow-xl" style={{ width: "min(22rem, calc(100vw - 2rem))", height: "min(27rem, calc(100% - 1.5rem))" }}>
+              <div className="flex items-center justify-between px-3 py-2 border-b border-border shrink-0">
+                <div>
+                  <h2 className="font-semibold text-sm">Room chat</h2>
+                  <p className="text-xs text-muted-foreground">Messages are visible to this room.</p>
+                </div>
+                <button type="button" onClick={() => setChatOpen(false)} className="dd-tool-btn !w-8 !h-8" aria-label="Close room chat">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              {status !== "ready" && <div className="px-3 py-1.5 text-xs text-muted-foreground bg-muted/60">Reconnecting to the room…</div>}
+              <div className="flex-1 min-h-0 overflow-y-auto p-3 space-y-3" aria-live="polite" aria-relevant="additions">
+                {chatMessages.length === 0 ? (
+                  <p className="text-sm text-muted-foreground text-center py-8">No messages yet. Say hello!</p>
+                ) : chatMessages.map((message, index) => (
+                  <div key={message.id ?? `${message.userId}-${message.ts}-${index}`} className="text-sm break-words">
+                    <div className="flex items-baseline gap-2">
+                      <span className="font-semibold">{message.username}</span>
+                      <time className="text-[10px] text-muted-foreground" dateTime={new Date(message.ts).toISOString()}>
+                        {new Date(message.ts).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
+                      </time>
+                    </div>
+                    <p className="whitespace-pre-wrap">{message.text}</p>
+                  </div>
+                ))}
+                <div ref={chatBottomRef} />
+              </div>
+              {chatError && <p role="alert" className="px-3 pb-1 text-xs text-destructive">{chatError}</p>}
+              <form onSubmit={onSendChat} className="p-2 border-t border-border flex gap-2 shrink-0">
+                <label className="sr-only" htmlFor="room-chat-input">Message</label>
+                <input
+                  id="room-chat-input"
+                  value={chatInput}
+                  maxLength={500}
+                  onChange={(event) => setChatInput(event.target.value)}
+                  placeholder="Write a message…"
+                  className="flex-1 min-w-0 h-9 px-3 rounded-lg border border-input bg-background text-sm"
+                  disabled={status !== "ready" || chatSending}
+                />
+                <button type="submit" aria-label="Send message" disabled={status !== "ready" || chatSending || !chatInput.trim()} className="h-9 w-10 rounded-lg bg-primary text-primary-foreground flex items-center justify-center disabled:opacity-45">
+                  {chatSending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                </button>
+              </form>
+            </aside>
+          )}
         </section>
+      </div>
       </div>
     </div>
   );

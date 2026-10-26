@@ -2,31 +2,43 @@ import { useEffect, useState, type FormEvent } from "react";
 import { useLocation } from "wouter";
 import { useAuth } from "@/lib/auth-context";
 import { api, type DrawingHistoryItem } from "@/lib/api";
-import { Palette, Plus, LogIn, LogOut, Image as ImageIcon, Loader2, Trash2, Download } from "lucide-react";
+import { Palette, Plus, LogIn, LogOut, Image as ImageIcon, Loader2, Trash2, Download } from "@/lib/lucide-icons";
+import { ThemeToggle } from "@/components/ThemeToggle";
 
 export default function Dashboard() {
   const { user, logout } = useAuth();
   const [, navigate] = useLocation();
   const [code, setCode] = useState("");
+  const [maxPlayers, setMaxPlayers] = useState(2);
   const [creating, setCreating] = useState(false);
   const [joining, setJoining] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [history, setHistory] = useState<DrawingHistoryItem[]>([]);
   const [historyLoading, setHistoryLoading] = useState(true);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+
+  const loadHistory = async () => {
+    setHistoryLoading(true);
+    setHistoryError(null);
+    try {
+      const { drawings } = await api.listDrawings();
+      setHistory(drawings);
+    } catch (err) {
+      setHistoryError(err instanceof Error ? err.message : "Could not load your saved doodles");
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
 
   useEffect(() => {
-    api
-      .listDrawings()
-      .then(({ drawings }) => setHistory(drawings))
-      .catch(() => setHistory([]))
-      .finally(() => setHistoryLoading(false));
+    void loadHistory();
   }, []);
 
   const onCreate = async () => {
     setCreating(true);
     setError(null);
     try {
-      const { session } = await api.createSession();
+      const { session } = await api.createSession(maxPlayers);
       navigate(`/room/${session.code}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not create session");
@@ -54,8 +66,8 @@ export default function Dashboard() {
     try {
       await api.deleteDrawing(id);
       setHistory((h) => h.filter((d) => d.id !== id));
-    } catch {
-      // ignore
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not delete this saved doodle");
     }
   };
 
@@ -67,7 +79,9 @@ export default function Dashboard() {
   };
 
   return (
-    <div className="dd-bg-gradient min-h-screen">
+    <div
+      className="dd-page-fade-in dd-bg-gradient min-h-screen"
+    >
       <header className="border-b border-border/60 bg-background/60 backdrop-blur sticky top-0 z-10">
         <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -84,6 +98,7 @@ export default function Dashboard() {
               <div className="font-medium">{user?.username}</div>
               <div className="text-xs text-muted-foreground">{user?.email}</div>
             </div>
+            <ThemeToggle />
             <button
               onClick={logout}
               className="h-9 px-3 rounded-lg border border-border bg-card hover:bg-muted transition flex items-center gap-1.5 text-sm"
@@ -106,6 +121,33 @@ export default function Dashboard() {
             <p className="text-sm text-muted-foreground mb-4">
               Spin up a new room and share the code with a friend.
             </p>
+            <fieldset className="mb-4">
+              <legend className="text-xs uppercase tracking-wider text-muted-foreground mb-2 font-semibold">
+                Number of players
+              </legend>
+              <div className="grid grid-cols-3 gap-2">
+                {([2, 3, 4] as const).map((n) => (
+                  <label
+                    key={n}
+                    className={`relative flex h-11 cursor-pointer items-center justify-center rounded-lg border text-sm font-medium transition focus-within:ring-2 focus-within:ring-ring ${
+                      maxPlayers === n
+                        ? "border-primary bg-primary/10 text-primary"
+                        : "border-border bg-card hover:bg-muted"
+                    }`}
+                  >
+                    <input
+                      className="sr-only"
+                      type="radio"
+                      name="maxPlayers"
+                      value={n}
+                      checked={maxPlayers === n}
+                      onChange={() => setMaxPlayers(n)}
+                    />
+                    {n} players
+                  </label>
+                ))}
+              </div>
+            </fieldset>
             <button
               onClick={onCreate}
               disabled={creating}
@@ -127,11 +169,16 @@ export default function Dashboard() {
               Enter a room code your partner shared with you.
             </p>
             <form onSubmit={onJoin} className="flex gap-2">
+              <label htmlFor="join-room-code" className="sr-only">Room code</label>
               <input
+                id="join-room-code"
                 value={code}
                 onChange={(e) => setCode(e.target.value.toUpperCase())}
                 placeholder="e.g. ABC123"
                 maxLength={6}
+                required
+                pattern="[A-HJ-NP-Z2-9]{6}"
+                title="Enter the 6-character room code"
                 className="flex-1 h-11 px-3 rounded-lg border border-input bg-background focus:outline-none focus:ring-2 focus:ring-ring uppercase tracking-[0.3em] text-center font-mono"
               />
               <button
@@ -147,7 +194,7 @@ export default function Dashboard() {
         </section>
 
         {error && (
-          <div className="text-sm text-destructive bg-destructive/10 border border-destructive/30 rounded-lg p-3">
+          <div role="alert" className="text-sm text-destructive bg-destructive/10 border border-destructive/30 rounded-lg p-3">
             {error}
           </div>
         )}
@@ -165,11 +212,21 @@ export default function Dashboard() {
               <Loader2 className="w-5 h-5 animate-spin mx-auto mb-2" />
               Loading your gallery…
             </div>
+          ) : historyError ? (
+            <div role="alert" className="dd-card p-8 text-center">
+              <p className="text-sm text-destructive mb-4">{historyError}</p>
+              <button type="button" onClick={() => void loadHistory()} className="h-9 px-4 rounded-lg border border-border bg-card hover:bg-muted text-sm font-medium">
+                Try again
+              </button>
+            </div>
           ) : history.length === 0 ? (
-            <div className="dd-card p-10 text-center">
-              <ImageIcon className="w-8 h-8 mx-auto text-muted-foreground mb-2" />
-              <p className="text-sm text-muted-foreground">
-                No saved doodles yet. Create a session and hit Save when you're done.
+            <div className="dd-card p-12 text-center border-dashed flex flex-col items-center justify-center">
+              <div className="w-16 h-16 rounded-full bg-muted flex items-center justify-center mb-4">
+                <ImageIcon className="w-8 h-8 text-muted-foreground opacity-50" />
+              </div>
+              <h3 className="text-lg font-medium mb-1">Your canvas awaits</h3>
+              <p className="text-sm text-muted-foreground max-w-sm mx-auto">
+                No saved doodles yet. Create a new session, invite a friend, and hit "Save" when you're done drawing to see it here!
               </p>
             </div>
           ) : (
@@ -182,7 +239,7 @@ export default function Dashboard() {
                   <div className="p-3 flex items-start justify-between gap-2">
                     <div className="min-w-0">
                       <div className="text-sm font-medium truncate">
-                        with {item.partnerUsername}
+                        {!item.partnerUsername || item.partnerUsername === "Solo" ? "Solo drawing" : `with ${item.partnerUsername}`}
                       </div>
                       <div className="text-xs text-muted-foreground">
                         {new Date(item.createdAt).toLocaleString()} · {item.sessionCode}

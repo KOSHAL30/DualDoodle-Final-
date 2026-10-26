@@ -34,8 +34,12 @@ router.post("/auth/signup", authLimiter, async (req, res) => {
       return res.status(400).json({ error: "Password must be at least 6 characters" });
     }
 
+    const safeUsername = username.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const existing = await UserModel.findOne({
-      $or: [{ email: email.toLowerCase() }, { username: username.trim() }],
+      $or: [
+        { email: email.toLowerCase() },
+        { username: { $regex: new RegExp(`^${safeUsername}$`, 'i') } }
+      ],
     });
     if (existing) {
       return res.status(409).json({ error: "Username or email already in use" });
@@ -61,11 +65,17 @@ router.post("/auth/signup", authLimiter, async (req, res) => {
 
 router.post("/auth/login", authLimiter, async (req, res) => {
   try {
-    const { email, password } = req.body ?? {};
-    if (typeof email !== "string" || typeof password !== "string") {
-      return res.status(400).json({ error: "Email and password are required" });
+    const { identifier, password } = req.body ?? {};
+    if (typeof identifier !== "string" || typeof password !== "string") {
+      return res.status(400).json({ error: "Email/Username and password are required" });
     }
-    const user = await UserModel.findOne({ email: email.toLowerCase() });
+    const safeIdentifier = identifier.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const user = await UserModel.findOne({ 
+      $or: [
+        { email: identifier.toLowerCase() },
+        { username: { $regex: new RegExp(`^${safeIdentifier}$`, 'i') } }
+      ]
+    });
     if (!user) {
       return res.status(401).json({ error: "Invalid credentials" });
     }

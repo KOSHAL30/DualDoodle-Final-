@@ -1,0 +1,46 @@
+/**
+ * Import icons by file so the build avoids lucide-react's all-icons barrel.
+ */
+export { default as AlertCircle } from "lucide-react/dist/esm/icons/circle-alert.js";
+export { default as ArrowLeft } from "lucide-react/dist/esm/icons/arrow-left.js";
+export { default as ArrowRight } from "lucide-react/dist/esm/icons/arrow-right.js";
+export { default as Brush } from "lucide-react/dist/esm/icons/brush.js";
+export { default as Check } from "lucide-react/dist/esm/icons/check.js";
+export { default as ChevronDown } from "lucide-react/dist/esm/icons/chevron-down.js";
+export { default as ChevronDownIcon } from "lucide-react/dist/esm/icons/chevron-down.js";
+export { default as ChevronLeft } from "lucide-react/dist/esm/icons/chevron-left.js";
+export { default as ChevronLeftIcon } from "lucide-react/dist/esm/icons/chevron-left.js";
+export { default as ChevronRight } from "lucide-react/dist/esm/icons/chevron-right.js";
+export { default as ChevronRightIcon } from "lucide-react/dist/esm/icons/chevron-right.js";
+export { default as ChevronUp } from "lucide-react/dist/esm/icons/chevron-up.js";
+export { default as Circle } from "lucide-react/dist/esm/icons/circle.js";
+export { default as Copy } from "lucide-react/dist/esm/icons/copy.js";
+export { default as Download } from "lucide-react/dist/esm/icons/download.js";
+export { default as Eraser } from "lucide-react/dist/esm/icons/eraser.js";
+export { default as GripVertical } from "lucide-react/dist/esm/icons/grip-vertical.js";
+export { default as Image } from "lucide-react/dist/esm/icons/image.js";
+export { default as Loader2 } from "lucide-react/dist/esm/icons/loader-circle.js";
+export { default as Loader2Icon } from "lucide-react/dist/esm/icons/loader-circle.js";
+export { default as LogIn } from "lucide-react/dist/esm/icons/log-in.js";
+export { default as LogOut } from "lucide-react/dist/esm/icons/log-out.js";
+export { default as MessageCircle } from "lucide-react/dist/esm/icons/message-circle.js";
+export { default as Minus } from "lucide-react/dist/esm/icons/minus.js";
+export { default as Moon } from "lucide-react/dist/esm/icons/moon.js";
+export { default as MoreHorizontal } from "lucide-react/dist/esm/icons/ellipsis.js";
+export { default as PaintBucket } from "lucide-react/dist/esm/icons/paint-bucket.js";
+export { default as Palette } from "lucide-react/dist/esm/icons/palette.js";
+export { default as PanelLeftIcon } from "lucide-react/dist/esm/icons/panel-left.js";
+export { default as Pen } from "lucide-react/dist/esm/icons/pen.js";
+export { default as Pipette } from "lucide-react/dist/esm/icons/pipette.js";
+export { default as Plus } from "lucide-react/dist/esm/icons/plus.js";
+export { default as Redo2 } from "lucide-react/dist/esm/icons/redo-2.js";
+export { default as Save } from "lucide-react/dist/esm/icons/save.js";
+export { default as Search } from "lucide-react/dist/esm/icons/search.js";
+export { default as Send } from "lucide-react/dist/esm/icons/send.js";
+export { default as Square } from "lucide-react/dist/esm/icons/square.js";
+export { default as Sun } from "lucide-react/dist/esm/icons/sun.js";
+export { default as Trash2 } from "lucide-react/dist/esm/icons/trash-2.js";
+export { default as Triangle } from "lucide-react/dist/esm/icons/triangle.js";
+export { default as Undo2 } from "lucide-react/dist/esm/icons/undo-2.js";
+export { default as Users } from "lucide-react/dist/esm/icons/users.js";
+export { default as X } from "lucide-react/dist/esm/icons/x.js";

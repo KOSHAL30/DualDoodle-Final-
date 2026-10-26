@@ -1,3 +1,9 @@
+try {
+  (process as unknown as { loadEnvFile?: () => void }).loadEnvFile?.();
+} catch {
+  // In production environments (Render, Railway, etc.), variables are supplied directly via process.env
+}
+
 import http from "node:http";
 import app from "./app";
 import { logger } from "./lib/logger";

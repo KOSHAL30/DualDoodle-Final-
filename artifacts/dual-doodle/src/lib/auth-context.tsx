@@ -4,7 +4,7 @@ import { api, clearAuth, getStoredUser, getToken, setAuth, type AuthUser } from 
 interface AuthContextValue {
   user: AuthUser | null;
   loading: boolean;
-  login: (email: string, password: string) => Promise<void>;
+  login: (identifier: string, password: string) => Promise<void>;
   signup: (username: string, email: string, password: string) => Promise<void>;
   logout: () => void;
 }
@@ -13,7 +13,9 @@ const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(getStoredUser());
-  const [loading, setLoading] = useState<boolean>(!!getToken() && !getStoredUser());
+  // Cached user data is only a display hint. Do not expose protected routes until
+  // the server has confirmed that the stored token is still valid.
+  const [loading, setLoading] = useState<boolean>(!!getToken());
 
   useEffect(() => {
     const token = getToken();
@@ -34,8 +36,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .finally(() => setLoading(false));
   }, []);
 
-  const login = async (email: string, password: string) => {
-    const { token, user } = await api.login({ email, password });
+  const login = async (identifier: string, password: string) => {
+    const { token, user } = await api.login({ identifier, password });
     setAuth(token, user);
     setUser(user);
   };

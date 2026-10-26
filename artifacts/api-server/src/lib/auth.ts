@@ -25,9 +25,11 @@ export function verifyToken(token: string): AuthPayload | null {
   }
 }
 
-declare module "express-serve-static-core" {
-  interface Request {
-    auth?: AuthPayload;
+declare global {
+  namespace Express {
+    interface Request {
+      auth?: AuthPayload;
+    }
   }
 }
 
